@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/mman.h>
@@ -11,11 +12,16 @@
 #define SEM_EMPTY_NAME "/empty_sem"
 #define SEM_FULL_NAME "/full_sem"
 
+void handle_sigint(int sig) {
+    exit(0);
+}
+
 typedef struct {
     int servings_left;
 } shared_data;
 
 int main(int argc, char *argv[]) {
+    signal(SIGINT, handle_sigint);
     int num_diners, num_servings;
     int i, pid;
     sem_t *empty_sem, *full_sem;
@@ -27,7 +33,7 @@ int main(int argc, char *argv[]) {
     num_diners = atoi(argv[1]);
     num_servings = atoi(argv[2]);
 
-    // Создание разделяемой памяти
+    // создание разделяемой памяти
     int shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
     if (shm_fd == -1) {
         perror("shm_open");
@@ -52,55 +58,50 @@ int main(int argc, char *argv[]) {
         perror("sem_open(empty_sem)");
         return 1;
     }
-    full_sem = sem_open(SEM_FULL_NAME, O_CREAT, 0666, 0);
+    full_sem = sem_open(SEM_FULL_NAME, O_CREAT, 0666, 1);
     if (full_sem == SEM_FAILED) {
         perror("sem_open(full_sem)");
         return 1;
     }
     int num_children = num_diners;
 
-    // Создание дочерних процессов
     for (i = 0; i < num_diners; i++) {
         pid = fork();
-        if (pid == 0) {  // Дочерний процесс
+        if (pid == 0) {  // создаем дочерний процесс
             if (shared_mem->servings_left > 0) {
-                //sem_wait(full_sem);  // Ждем, пока горшок не будет заполнен
-                sem_wait(empty_sem);  // Занимаем горшок
-                // Берем один кусок тушеного миссионера
+                //sem_wait(full_sem);  // ждем, пока горшок не будет заполнен
+                sem_wait(empty_sem);  // занимаем горшок
+                // берем один кусок тушеного миссионера
                 if (shared_mem->servings_left > 0) {
                     shared_mem->servings_left--;
                     printf("Savage %d took a serving. %d servings left.\n", i+1, shared_mem->servings_left);
                 }
-                sem_post(empty_sem);  // Освобождаем горшок
-            } else {
-                // В горшке больше нет еды, выходим
-                sem_post(empty_sem);  // Освобождаем горшок
-                sem_post(full_sem);  // Возвращаем семафоры в исходное состояние
-                sem_close(empty_sem);
-                sem_close(full_sem);
-                exit(0);
+                sem_post(empty_sem); // освобождаем горшок
+            } else{
+                sem_wait(full_sem);  // ждем, пока горшок не будет заполнен
+                if (shared_mem->servings_left == 0) {
+                    shared_mem->servings_left += num_servings;
+                    printf("Cook filled up the pot.\n");
+                }
+                sem_post(full_sem); // освобождаем горшок
             }
         }
     }
 
-    // Ожидание завершения дочерних процессов
+    // ожидание завершения дочерних процессов
     while (num_children > 0) {
         int status;
         pid_t child_pid = wait(&status);
-        /*if (child_pid == -1) {
-            perror("wait");
-            return 1;
-        }*/
         num_children--;
     }
 
-    // Освобождение ресурсов
+    // освобождение ресурсов
     sem_close(empty_sem);
     sem_close(full_sem);
     sem_unlink(SEM_EMPTY_NAME);
     sem_unlink(SEM_FULL_NAME);
 
-    // Освобождение разделяемой памяти
+    // освобождение разделяемой памяти
     munmap(shared_mem, sizeof(shared_data));
     shm_unlink(SHM_NAME);
     return 0;
