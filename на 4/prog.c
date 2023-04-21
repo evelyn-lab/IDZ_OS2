@@ -76,12 +76,14 @@ int main(int argc, char *argv[]) {
                     shared_mem->servings_left--;
                     printf("Savage %d took a serving. %d servings left.\n", i+1, shared_mem->servings_left);
                 }
+                sleep(1);
                 sem_post(empty_sem); // освобождаем горшок
             } else{
                 sem_wait(full_sem);  // ждем, пока горшок не будет заполнен
                 if (shared_mem->servings_left == 0) {
                     shared_mem->servings_left += num_servings;
                     printf("Cook filled up the pot.\n");
+                    sleep(1);
                 }
                 sem_post(full_sem); // освобождаем горшок
             }
