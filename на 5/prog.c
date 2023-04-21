@@ -1,128 +1,82 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <sys/types.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/wait.h>
-#include <sys/ipc.h>
-#include <sys/sem.h>
-#include <sys/shm.h>
+#include <semaphore.h>
 
-#define SHM_KEY 12345
-#define SEM_KEY 54321
+#define SHARED_MEMORY_NAME "/dinner"
+#define SEMAPHORE_NAME "/semaphore"
 
 void handle_sigint(int sig) {
     exit(0);
 }
 
-int main(int argc, char *argv[]) {
-    int i, shmid, semid;
-    int num_diners, num_servings;
+typedef struct {
+    int num_missionaries;
+    sem_t semaphore;
+} shared_data_t;
+
+int main(int argc, char** argv) {
     signal(SIGINT, handle_sigint);
-    int *pot; // указатель на разделяемую память
-    struct sembuf sem_lock = {0, -1, SEM_UNDO}; // операция блокировки семафора
-    struct sembuf sem_unlock = {0, 1, SEM_UNDO}; // операция разблокировки семафора
-    num_diners = atoi(argv[1]);
-    num_servings = atoi(argv[2]);
-    // создаем разделяемую память
-    shmid = shmget(SHM_KEY, num_servings * sizeof(int), IPC_CREAT | 0666);
-    if (shmid == -1) {
-        perror("shmget");
-        exit(1);
+    if (argc != 3) {
+        printf("Usage: %s <num_diners> <num_missionaries>\n", argv[0]);
+        return 1;
     }
-    // создаем семафор
-    semid = semget(SEM_KEY, 1, IPC_CREAT | 0666);
-    if (semid == -1) {
-        perror("semget");
-        exit(1);
-    }
+    int num_diners = atoi(argv[1]);
+    int num_missionaries = atoi(argv[2]);
     
-    // инициализируем горшок едой
-    pot = shmat(shmid, NULL, 0);
-    if (pot == (int *)-1) {
-        perror("shmat");
-        exit(1);
-    }
-    for (i = 0; i < num_servings; i++) {
-        pot[i] = 1;
-    }
+    // создание разделяемой памяти
+    int shared_mem_fd = shm_open(SHARED_MEMORY_NAME, O_CREAT | O_RDWR, 0666);
+    ftruncate(shared_mem_fd, sizeof(shared_data_t));
+    shared_data_t* shared_data = mmap(NULL, sizeof(shared_data_t), PROT_READ | PROT_WRITE, MAP_SHARED, shared_mem_fd, 0);
+    shared_data->num_missionaries = num_missionaries;
+    // создание неименованного семафора
+    sem_init(&shared_data->semaphore, 1, 1); // Initialize semaphore to 1 (unlocked)
     
-    // инициализируем семафор значением 1
-    if (semctl(semid, 0, SETVAL, 1) == -1) {
-        perror("semctl");
-        exit(1);
-    }
     
-    // создаем N дочерних процессов
-    for (i = 0; i < num_diners; i++) {
-        pid_t pid = fork();
-        if (pid == -1) {
-            perror("fork");
-            exit(1);
-        } else if (pid == 0) {
-            // дочерний процесс
-            int j, k;
-            int *ate = malloc(sizeof(int));
-            if (ate == NULL) {
-                perror("malloc");
-                exit(1);
-            }
-            *ate = 0;
-            
-            while (*ate < 5) { // каждый дикарь должен съесть 5 кусков
-                // ждем доступа к горшку
-                if (semop(semid, &sem_lock, 1) == -1) {
-                    perror("semop");
-                    exit(1);
-                }
-                
-                // ищем свободный кусок еды в горшке
-                for (j = 0; j < num_servings; j++) {
-                    if (pot[j] == 1) {
-                    pot[j] = 0; // забираем кусок еды из горшка
-                    printf("Savage %d took a serving. %d servings left.\n", i+1, num_servings-j-1);
-                    fflush(stdout);
-                    break;
-                    }
-                }
-            }
-            
-            // освобождаем горшок
-            if (semop(semid, &sem_unlock, 1) == -1) {
-                perror("semop");
-                exit(1);
-            }
-            
-            // если горшок пуст, будим повара
-            if (j == num_servings) {
-                printf("Дикарь %d ждет повара\n", i + 1);
-                fflush(stdout);
-                sleep(1);
+    pid_t* child_pids = malloc(num_diners * sizeof(pid_t));
+    for (int i = 0; i < num_diners; i++) {
+        pid_t child_pid = fork();
+        if (child_pid == 0) { // создаем дочерний процесс
+            if (shared_data->num_missionaries > 0) {
+                // Take a missionary from the pot
+                sem_wait(&shared_data->semaphore);
+                 if (shared_data->num_missionaries > 0) {
+                     // берем один кусок тушеного миссионера
+                    shared_data->num_missionaries--;
+                    printf("Diner %d took a missionary. Remaining: %d\n", i+1, shared_data->num_missionaries);
+                 }
+                 sleep(1);
+                // освобождаем горшок
+                sem_post(&shared_data->semaphore);
             } else {
-                (*ate)++; // увеличиваем счетчик съеденной еды
+                // ждем, пока горшок не будет заполнен
+                sem_wait(&shared_data->semaphore);
+                if (shared_data->num_missionaries  == 0) {
+                    printf("Cook filled up the pot.\n");
+                    sleep(1);
+                    shared_data->num_missionaries += num_missionaries;
+                }
+                sem_post(&shared_data->semaphore);  // освобождаем горшок
             }
-        
-        
-        free(ate);
-        exit(0);
+        } else {
+            child_pids[i] = child_pid;
         }
     }
-
-// ждем завершения всех дочерних процессов
-for (i = 0; i < num_diners; i++) {
-    wait(NULL);
-}
-
-// удаляем семафор
-if (semctl(semid, 0, IPC_RMID, 0) == -1) {
-    perror("semctl");
-    exit(1);
-}
-
-// удаляем разделяемую память
-if (shmctl(shmid, IPC_RMID, NULL) == -1) {
-    perror("shmctl");
-    exit(1);
-}
-
-return 0;
+    
+    // ожидание завершения дочерних процессов
+    for (int i = 0; i < num_diners; i++) {
+        waitpid(child_pids[i], NULL, 0);
+    }
+    
+    // освобождение ресурсов
+    munmap(shared_data, sizeof(shared_data_t));
+    close(shared_mem_fd);
+    shm_unlink(SHARED_MEMORY_NAME);
+    sem_destroy(&shared_data->semaphore);
+    sem_unlink(SEMAPHORE_NAME);
+    free(child_pids);
+    return 0;
 }
