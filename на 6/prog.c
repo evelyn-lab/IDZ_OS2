@@ -10,8 +10,12 @@
 #define SEM_KEY 0x1234
 #define SHM_KEY 0x5678
 
-int main(int argc, char *argv[]) {
+void handle_sigint(int sig) {
+    exit(0);
+}
 
+int main(int argc, char *argv[]) {
+    signal(SIGINT, handle_sigint);
     // Проверка наличия аргументов командной строки
     if (argc != 3) {
         printf("Usage: ./dinners N M\n");
