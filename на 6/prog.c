@@ -30,46 +30,32 @@ int main(int argc, char *argv[]) {
     int shmid = shmget(SHM_KEY, sizeof(int), IPC_CREAT | 0666);
     int *counter = (int *) shmat(shmid, NULL, 0);
     *counter = M;
+    pid_t* child_pids = malloc(N * sizeof(pid_t));
     // Создание дочерних процессов
     for (int i = 0; i < N; i++) {
         pid_t pid = fork();
         if (pid == 0) {
             struct sembuf wait_empty = {0, -1, 0};
-            struct sembuf wait_mutex = {1, -1, 0};
-            struct sembuf signal_mutex = {1, 1, 0};
+            semop(semid, &wait_empty, 1);
             if (*counter > 0) {
-                // Уменьшение значения семафора wait_empty на 1
-                semop(semid, &wait_empty, 1);
-                // Уменьшение значения семафора wait_mutex на 1
-                semop(semid, &wait_mutex, 1);
                 *counter -= 1;
                 printf("Diner %d took a missionary. Remaining: %d\n", i+1,  *counter);
-                sleep(1);
-                // Увеличение значения семафора signal_mutex на 1
-                semop(semid, &signal_mutex, 1);
-                // Увеличение значения семафора wait_empty на 1
-                semop(semid, &wait_empty, 1);
-                // Ожидание 1 секунды перед следующим приемом пищи
             } else {
-                // Уменьшение значения семафора wait_empty на 1
-                semop(semid, &wait_empty, 1);
-                // Уменьшение значения семафора wait_mutex на 1
-                semop(semid, &wait_mutex, 1);
                 *counter += M;
                 printf("Cook filled up the pot.\n");
-                sleep(1);
-                // Увеличение значения семафора signal_mutex на 1
-                semop(semid, &signal_mutex, 1);
-                // Увеличение значения семафора wait_empty на 1
-                semop(semid, &wait_empty, 1);
-                // Ожидание 1 секунды перед следующим приемом пищи
             }
+            // Ожидание 1 секунды перед следующим приемом пищи
+            sleep(1);
+            // Увеличение значения семафора wait_empty на 1
+            semop(semid, &wait_empty, 1);
+        } else {
+            child_pids[i] = pid;
         }
     }
 
     // Ожидание завершения дочерних процессов
     for (int i = 0; i < N; i++) {
-        wait(NULL);
+        waitpid(child_pids[i], NULL, 0);
     }
 
     // Удаление семафоров
