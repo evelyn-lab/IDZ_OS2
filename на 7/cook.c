@@ -48,8 +48,6 @@ int main(int argc, char* argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    printf("Повар начал работу\n");
-
     while (1) {
         // ждем, пока горшок не опустеет
         sem_wait(sem);
@@ -57,13 +55,11 @@ int main(int argc, char* argv[]) {
         if (shared_data[0] == 0) {
             // горшок пуст, восстанавливаем его значение
             shared_data[0] = m;
-            printf("Повар наполнил горшок\n");
+            printf("Cook filled up the pot.\n");
         }
 
         // освобождаем семафор
         sem_post(sem);
-
-        // ждем 1 секунду (симулируем приготовление еды)
         sleep(1);
     }
 
