@@ -7,7 +7,12 @@
 
 #define KEY 12345
 
+void handle_sigint(int sig) {
+    exit(0);
+}
+
 int main(int argc, char* argv[]) {
+    signal(SIGINT, handle_sigint);
     int semid, shmid, *shm, i;
     struct sembuf op;
     op.sem_num = 0;
