@@ -5,6 +5,7 @@
 #include <sys/ipc.h>
 #include <sys/sem.h>
 #include <sys/shm.h>
+#include <sys/wait.h>
 
 #define SEM_KEY 0x1234
 #define SHM_KEY 0x5678
@@ -16,7 +17,6 @@ int main(int argc, char *argv[]) {
         printf("Usage: ./dinners N M\n");
         return -1;
     }
-
     // Инициализация параметров
     int N = atoi(argv[1]);
     int M = atoi(argv[2]);
@@ -29,41 +29,41 @@ int main(int argc, char *argv[]) {
     // Создание разделяемой памяти
     int shmid = shmget(SHM_KEY, sizeof(int), IPC_CREAT | 0666);
     int *counter = (int *) shmat(shmid, NULL, 0);
-    *counter = 0;
-
+    *counter = M;
     // Создание дочерних процессов
     for (int i = 0; i < N; i++) {
         pid_t pid = fork();
         if (pid == 0) {
-            // Код дочернего процесса
-            while (1) {
-                struct sembuf wait_empty = {0, -1, 0};
-                struct sembuf wait_mutex = {1, -1, 0};
-                struct sembuf signal_mutex = {1, 1, 0};
-
+            struct sembuf wait_empty = {0, -1, 0};
+            struct sembuf wait_mutex = {1, -1, 0};
+            struct sembuf signal_mutex = {1, 1, 0};
+            if (*counter > 0) {
                 // Уменьшение значения семафора wait_empty на 1
                 semop(semid, &wait_empty, 1);
-
                 // Уменьшение значения семафора wait_mutex на 1
                 semop(semid, &wait_mutex, 1);
-
-                // Увеличение значения счетчика на 1
-                *counter += 1;
-
-                printf("Diner %d is eating. Total eaten: %d\n", i+1, *counter);
-
+                *counter -= 1;
+                printf("Diner %d took a missionary. Remaining: %d\n", i+1,  *counter);
+                sleep(1);
                 // Увеличение значения семафора signal_mutex на 1
                 semop(semid, &signal_mutex, 1);
-
                 // Увеличение значения семафора wait_empty на 1
                 semop(semid, &wait_empty, 1);
-
                 // Ожидание 1 секунды перед следующим приемом пищи
+            } else {
+                // Уменьшение значения семафора wait_empty на 1
+                semop(semid, &wait_empty, 1);
+                // Уменьшение значения семафора wait_mutex на 1
+                semop(semid, &wait_mutex, 1);
+                *counter += M;
+                printf("Cook filled up the pot.\n");
                 sleep(1);
+                // Увеличение значения семафора signal_mutex на 1
+                semop(semid, &signal_mutex, 1);
+                // Увеличение значения семафора wait_empty на 1
+                semop(semid, &wait_empty, 1);
+                // Ожидание 1 секунды перед следующим приемом пищи
             }
-        } else if (pid < 0) {
-            printf("Error creating child process.\n");
-            return -1;
         }
     }
 
